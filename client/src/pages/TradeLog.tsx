@@ -93,7 +93,7 @@ export default function TradeLog() {
         if (filterProfile && t.profile !== filterProfile) return false;
         if (filterAccount && t.account !== filterAccount) return false;
         if (filterDateFrom && istDateKey(t.entryDateTime) < filterDateFrom) return false;
-        if (filterDateTo && t.entryDateTime.slice(0, 10) > filterDateTo) return false;
+        if (filterDateTo && istDateKey(t.entryDateTime) > filterDateTo) return false;
         if (filterStatus && t.status !== filterStatus) return false;
         if (filterContract && t.contractType !== filterContract) return false;
         if (filterInstrument && t.instrumentId !== filterInstrument) return false;

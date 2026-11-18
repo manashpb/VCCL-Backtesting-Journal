@@ -55,6 +55,7 @@ try{
   await request('/api/trades/snapshots/'+snap.id,'DELETE');
   const metricTrades=[2,-1,-1,0,3].map((r,i)=>({id:i+1,status:'Closed',pnl:r*100,plannedRisk:100,entryDateTime:`2025-01-0${i+1}T04:00:00Z`,exitDateTime:`2025-01-0${i+1}T05:00:00Z`}));
   const m=backtestMetrics([...metricTrades,{id:99,status:'Open',pnl:999,plannedRisk:100}]);assert.equal(m.count,5);assert.equal(m.winRate,40);assert.equal(m.expectancy,.6);assert.equal(m.totalR,3);assert.equal(m.drawdown,2);assert.equal(m.maxStreak,2);assert.equal(m.profitFactor,2.5);
+  assert.equal(backtestMetrics([{...metricTrades[0],exitDateTime:'2025-01-01T20:00:00Z'}]).curve[0].date,'2025-01-02');
   const missing=backtestMetrics([{...metricTrades[0],plannedRisk:null}]);assert.equal(missing.rCount,0);assert.equal(missing.expectancy,null);assert.equal(missing.net,200);
   console.log('Backtesting rules, versions, batches, sessions, trade linkage, auth, images and metrics passed');
 }finally{child.kill();await new Promise(r=>child.once('exit',r));await rm(dir,{recursive:true,force:true});}
