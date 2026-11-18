@@ -1,0 +1,87 @@
+import express, { Request, Response, NextFunction } from 'express';
+import { backtestingRoutes } from './routes/backtesting.js';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import { Database } from './db/database.js';
+import { tradeRoutes } from './routes/trades.js';
+import { instrumentRoutes } from './routes/instruments.js';
+import { frameworkRoutes } from './routes/framework.js';
+import { tagRoutes } from './routes/tags.js';
+import { timingSafeEqual } from 'crypto';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+const app = express();
+const PORT = process.env.PORT || 5000;
+
+const username = process.env.JOURNAL_USER;
+const password = process.env.JOURNAL_PASSWORD;
+if (process.env.NODE_ENV === 'production' && (!username || !password)) {
+  throw new Error('Set JOURNAL_USER and JOURNAL_PASSWORD before starting production');
+}
+app.use((req, res, next) => {
+  if (!username || !password || req.path === '/api/health') return next();
+  const expected = Buffer.from(`${username}:${password}`);
+  const actual = Buffer.from(req.headers.authorization?.startsWith('Basic ') ? req.headers.authorization.slice(6) : '', 'base64');
+  if (actual.length === expected.length && timingSafeEqual(actual, expected)) return next();
+  res.setHeader('WWW-Authenticate', 'Basic realm="Backtesting Journal"');
+  res.status(401).send('Authentication required');
+});
+
+app.use((_req,res,next)=>{
+  res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; base-uri 'self'; frame-ancestors 'none'");
+  res.setHeader('X-Content-Type-Options','nosniff');
+  res.setHeader('Cache-Control','no-store');
+  next();
+});
+// Block cross-origin writes, including multipart image uploads.
+app.use((req,res,next) => {
+  if (!['GET','HEAD','OPTIONS'].includes(req.method) && req.headers.origin) {
+    const expected = process.env.PORTAL_ORIGIN || `${req.protocol}://${req.get('host')}`;
+    if (req.headers.origin !== expected) return res.status(403).json({error:'Invalid request origin'});
+  }
+  next();
+});
+// Middleware
+// Workspace strips its route prefix before forwarding to this service.
+
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ limit: '50mb', extended: true }));
+
+// Static files for snapshots
+const snapshotsDir = process.env.SNAPSHOTS_DIR || path.join(__dirname, '..', 'snapshots');
+app.use('/snapshots', express.static(snapshotsDir));
+
+// Initialize database
+const db = new Database();
+await db.initialize();
+
+// Routes
+app.use('/api/backtesting', backtestingRoutes(db));
+app.use('/api/trades', tradeRoutes(db));
+app.use('/api/instruments', instrumentRoutes(db));
+app.use('/api/tags', tagRoutes(db));
+
+app.use('/api/profiles', frameworkRoutes(db));
+const clientDir = path.resolve(__dirname, '../../client/dist');
+app.use(express.static(clientDir));
+app.get('*', (req, res, next) => {
+  if (req.path.startsWith('/api/') || req.path.startsWith('/snapshots/')) return next();
+  res.sendFile(path.join(clientDir, 'index.html'));
+});
+
+// Health check
+app.get('/api/health', (req: Request, res: Response) => {
+  res.json({ status: 'ok' });
+});
+
+// Error handling middleware
+app.use((err: Error, req: Request, res: Response, next: NextFunction) => {
+  console.error(err);
+  res.status((err as any).status || 500).json({ error: err.message });
+});
+
+app.listen(Number(PORT), '127.0.0.1', () => {
+  console.log(`Backtesting Journal Server running on port ${PORT}`);
+});

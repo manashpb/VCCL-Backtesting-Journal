@@ -1,0 +1,18 @@
+{
+  "name": "backtesting-journal",
+  "version": "1.0.0",
+  "description": "Self-hosted strategy backtesting journal",
+  "private": true,
+  "scripts": {
+    "setup": "npm install --prefix server && npm install --prefix client",
+    "dev:server": "npm run dev --prefix server",
+    "dev:client": "npm run dev --prefix client",
+    "dev": "concurrently \"npm run dev:server\" \"npm run dev:client\"",
+    "build": "npm run build --prefix server && npm run build --prefix client",
+    "start": "npm run start --prefix server",
+    "test": "node tests/text-trade.test.mjs && node tests/framework.test.mjs && node tests/backtesting.test.mjs"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}

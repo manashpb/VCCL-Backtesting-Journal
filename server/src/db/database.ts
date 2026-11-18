@@ -1,0 +1,173 @@
+import sqlite3 from 'sqlite3';
+import path from 'path';
+import fs from 'fs';
+import { fileURLToPath } from 'url';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const dbPath = process.env.DB_PATH || path.join(__dirname, '..', '..', 'backtesting.db');
+
+export class Database {
+  private db: sqlite3.Database;
+
+  constructor() {
+    if (!fs.existsSync(path.dirname(dbPath))) fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+    this.db = new sqlite3.Database(dbPath);
+    this.db.exec('PRAGMA foreign_keys = ON');
+  }
+
+  async initialize() {
+    this.db.serialize(() => {
+      this.db.run(`
+        CREATE TABLE IF NOT EXISTS instruments (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          name TEXT UNIQUE NOT NULL,
+          type TEXT CHECK(type IN ('CFD', 'Futures', 'Option', 'Equity')) NOT NULL,
+          pointValue REAL NOT NULL,
+          createdAt DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+      `);
+
+      this.db.run(`
+        CREATE TABLE IF NOT EXISTS tag_categories (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          name TEXT UNIQUE NOT NULL,
+          createdAt DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+      `);
+
+      this.db.run(`
+        CREATE TABLE IF NOT EXISTS tags (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          categoryId INTEGER NOT NULL,
+          name TEXT NOT NULL,
+          createdAt DATETIME DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (categoryId) REFERENCES tag_categories(id) ON DELETE CASCADE,
+          UNIQUE(categoryId, name)
+        )
+      `);
+
+      this.db.run(`
+        CREATE TABLE IF NOT EXISTS trades (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          instrumentId INTEGER NOT NULL,
+          direction TEXT CHECK(direction IN ('Long', 'Short')) NOT NULL,
+          contractType TEXT CHECK(contractType IN ('CFD', 'Futures', 'Option', 'Equity')) NOT NULL,
+          entryDateTime TEXT NOT NULL,
+          entryPrice REAL NOT NULL,
+          slPrice REAL,
+          targetPrice REAL,
+          quantity REAL NOT NULL,
+          exitDateTime TEXT,
+          exitPrice REAL,
+          status TEXT CHECK(status IN ('Open', 'Closed')) DEFAULT 'Open',
+          pnl REAL,
+          comments TEXT,
+          createdAt DATETIME DEFAULT CURRENT_TIMESTAMP,
+          updatedAt DATETIME DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (instrumentId) REFERENCES instruments(id)
+        )
+      `);
+
+      this.db.run(`
+        CREATE TABLE IF NOT EXISTS trade_tags (
+          tradeId INTEGER NOT NULL,
+          tagId INTEGER NOT NULL,
+          PRIMARY KEY (tradeId, tagId),
+          FOREIGN KEY (tradeId) REFERENCES trades(id) ON DELETE CASCADE,
+          FOREIGN KEY (tagId) REFERENCES tags(id) ON DELETE CASCADE
+        )
+      `);
+
+      this.db.run(`
+        CREATE TABLE IF NOT EXISTS trade_snapshots (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          tradeId INTEGER NOT NULL,
+          filePath TEXT NOT NULL,
+          createdAt DATETIME DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (tradeId) REFERENCES trades(id) ON DELETE CASCADE
+        )
+      `);
+
+
+    });
+    await this.migrateFramework();
+    await this.migrateBacktesting();
+  }
+
+  async migrateBacktesting() {
+    const snapshotColumns=await this.all('PRAGMA table_info(trade_snapshots)');
+    if(!snapshotColumns.some(c=>c.name==='stage')) await this.run("ALTER TABLE trade_snapshots ADD COLUMN stage TEXT NOT NULL DEFAULT 'Review'");
+    await this.run(`CREATE TABLE IF NOT EXISTS bt_strategies (id INTEGER PRIMARY KEY, name TEXT NOT NULL, version INTEGER NOT NULL, rules TEXT NOT NULL, createdAt TEXT DEFAULT CURRENT_TIMESTAMP, UNIQUE(name,version))`);
+    await this.run(`CREATE TABLE IF NOT EXISTS bt_batches (id INTEGER PRIMARY KEY, strategyId INTEGER NOT NULL REFERENCES bt_strategies(id), name TEXT NOT NULL, startDate TEXT NOT NULL, endDate TEXT NOT NULL, instruments TEXT NOT NULL, timeframe TEXT NOT NULL, source TEXT NOT NULL, assumptions TEXT NOT NULL, objective TEXT NOT NULL, phase TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'Active', createdAt TEXT DEFAULT CURRENT_TIMESTAMP)`);
+    await this.run(`CREATE TABLE IF NOT EXISTS bt_sessions (id INTEGER PRIMARY KEY, batchId INTEGER NOT NULL REFERENCES bt_batches(id), date TEXT NOT NULL, context TEXT NOT NULL, setups INTEGER NOT NULL, skipReason TEXT NOT NULL, reviewed INTEGER NOT NULL DEFAULT 0, UNIQUE(batchId,date))`);
+    const columns = await this.all('PRAGMA table_info(trades)');
+    for (const [name, definition] of Object.entries({sessionId:'INTEGER REFERENCES bt_sessions(id)', adherence:"TEXT NOT NULL DEFAULT 'Unreviewed'", setup:"TEXT NOT NULL DEFAULT ''", marketCondition:"TEXT NOT NULL DEFAULT ''"})) {
+      if (!columns.some(c => c.name === name)) await this.run('ALTER TABLE trades ADD COLUMN ' + name + ' ' + definition);
+    }
+  }
+
+  async migrateFramework() {
+    const columns = await this.all('PRAGMA table_info(trades)');
+    const additions: Record<string, string> = {
+      profile: "TEXT NOT NULL DEFAULT 'prop'", holdingStyle: "TEXT NOT NULL DEFAULT 'Intraday'",
+      assetType: "TEXT NOT NULL DEFAULT 'CFD'", account: "TEXT NOT NULL DEFAULT 'Personal'",
+      strategy: "TEXT NOT NULL DEFAULT ''", plannedRisk: 'REAL', costs: 'REAL NOT NULL DEFAULT 0',
+      capitalCommitted: 'REAL', grossPnl: 'REAL', framework: 'TEXT', multiplier: 'REAL'
+    };
+    for (const [name, definition] of Object.entries(additions)) {
+      if (!columns.some(c => c.name === name)) await this.run('ALTER TABLE trades ADD COLUMN ' + name + ' ' + definition);
+    }
+    await this.run('CREATE TABLE IF NOT EXISTS profile_templates (profile TEXT PRIMARY KEY, version INTEGER NOT NULL, fields TEXT NOT NULL)');
+    console.log('Journal framework ready');
+  }
+
+  private writeTail: Promise<any> = Promise.resolve();
+  run(sql: string, params: any[] = []): Promise<{ lastID: number; changes: number }> {
+    const result = this.writeTail.then(() => this.rawRun(sql, params));
+    this.writeTail = result.catch(() => {});
+    return result;
+  }
+
+  transaction<T>(work: (run: (sql: string, params?: any[]) => Promise<{ lastID: number; changes: number }>) => Promise<T>): Promise<T> {
+    const result = this.writeTail.then(async () => {
+      await this.rawRun('BEGIN IMMEDIATE');
+      try { const value = await work(this.rawRun.bind(this)); await this.rawRun('COMMIT'); return value; }
+      catch (e) { await this.rawRun('ROLLBACK'); throw e; }
+    });
+    this.writeTail = result.catch(() => {});
+    return result;
+  }
+
+  private rawRun(sql: string, params: any[] = []): Promise<{ lastID: number; changes: number }> {
+    return new Promise((resolve, reject) => {
+      this.db.run(sql, params, function (err) {
+        if (err) reject(err);
+        else resolve({ lastID: this.lastID, changes: this.changes });
+      });
+    });
+  }
+
+  get(sql: string, params: any[] = []): Promise<any> {
+    return new Promise((resolve, reject) => {
+      this.db.get(sql, params, (err, row) => {
+        if (err) reject(err);
+        else resolve(row);
+      });
+    });
+  }
+
+  all(sql: string, params: any[] = []): Promise<any[]> {
+    return new Promise((resolve, reject) => {
+      this.db.all(sql, params, (err, rows) => {
+        if (err) reject(err);
+        else resolve(rows || []);
+      });
+    });
+  }
+
+  close(): Promise<void> {
+    return new Promise((resolve, reject) => {
+      this.db.close((err) => (err ? reject(err) : resolve()));
+    });
+  }
+}

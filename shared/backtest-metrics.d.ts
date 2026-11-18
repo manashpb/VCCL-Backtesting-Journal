@@ -1,0 +1,1 @@
+export function backtestMetrics(trades:any[]): {count:number;open:number;rCount:number;winRate:number|null;net:number;totalR:number;expectancy:number|null;avgWin:number|null;avgLoss:number|null;drawdown:number;maxStreak:number;profitFactor:number|null;curve:{id:number;date:string;r:number}[]};
