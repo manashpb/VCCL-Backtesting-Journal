@@ -11,7 +11,8 @@ let logs='';child.stdout.on('data',b=>logs+=b);child.stderr.on('data',b=>logs+=b
 const headers={Authorization:'Basic '+Buffer.from('test:test-only').toString('base64'),'Content-Type':'application/json'};
 async function request(url,method='GET',body,status=200){const r=await fetch(base+url,{method,headers,body:body===undefined?undefined:JSON.stringify(body)});const data=await r.json();assert.equal(r.status,status,JSON.stringify(data));return data;}
 try{
-  let ready=false;for(let i=0;i<200;i++){try{if((await fetch(base+'/api/health')).ok){ready=true;break;}}catch{}await new Promise(r=>setTimeout(r,100));}assert.ok(ready,logs);
+  // Fresh migrations can take longer on the remote disk than on a local SSD.
+  let ready=false;for(let i=0;i<600;i++){try{if((await fetch(base+'/api/health')).ok){ready=true;break;}}catch{}await new Promise(r=>setTimeout(r,100));}assert.ok(ready,logs);
   assert.equal((await fetch(base+'/api/backtesting')).status,401);
   assert.equal((await fetch(base+'/snapshots/any.png')).status,401);
   const s1=await request('/api/backtesting/strategies','POST',{name:'Breakout',rules:'Enter after close. Risk 1R.'});
