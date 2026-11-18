@@ -50,7 +50,7 @@ export function tradeRoutes(db: Database): Router {
     try {
       const { startDate, endDate, status, contractType, instrumentId } = req.query;
       let sql = `
-        SELECT t.*, i.name as instrumentName, i.pointValue,
+        SELECT t.*, (SELECT batchId FROM bt_sessions WHERE id=t.sessionId) AS batchId, i.name as instrumentName, i.pointValue,
           (SELECT GROUP_CONCAT(tg.id) FROM trade_tags tt JOIN tags tg ON tt.tagId = tg.id WHERE tt.tradeId = t.id) as tagIds,
           (SELECT GROUP_CONCAT(tg.name) FROM trade_tags tt JOIN tags tg ON tt.tagId = tg.id WHERE tt.tradeId = t.id) as tagNames,
           (SELECT GROUP_CONCAT(s.filePath) FROM trade_snapshots s WHERE s.tradeId = t.id) as snapshotPaths,
@@ -82,7 +82,7 @@ export function tradeRoutes(db: Database): Router {
   router.get('/:id', async (req, res) => {
     try {
       const trade = await db.get(`
-        SELECT t.*, i.name as instrumentName, i.pointValue
+        SELECT t.*, (SELECT batchId FROM bt_sessions WHERE id=t.sessionId) AS batchId, i.name as instrumentName, i.pointValue
         FROM trades t LEFT JOIN instruments i ON t.instrumentId = i.id
         WHERE t.id = ?`, [(req.params as Record<string, string>).id]);
       if (!trade) return res.status(404).json({ error: 'Trade not found' });
@@ -105,10 +105,10 @@ export function tradeRoutes(db: Database): Router {
       const existing = req.method === 'PUT' ? await db.get('SELECT * FROM trades WHERE id=?', [(req.params as Record<string, string>).id]) : null;
       if (req.method === 'PUT' && !existing) return res.status(404).json({ error: 'Trade not found' });
       const extra = await validateFramework(db, req.body, inst, existing);
-      const bt = await validateBacktest(db, req.body, existing);
       const pnl = extra.pnl !== undefined ? extra.pnl : isClosed ? calcPnl(direction, entryPrice, exitPrice, quantity, inst.pointValue) : null;
 
       const result = await db.transaction(async run => {
+      const bt = await validateBacktest(db, req.body, existing, run);
       const result = await run(
         `INSERT INTO trades (instrumentId, direction, contractType, entryDateTime, entryPrice, slPrice, targetPrice, quantity, exitDateTime, exitPrice, status, pnl, comments)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -142,10 +142,10 @@ export function tradeRoutes(db: Database): Router {
       const existing = req.method === 'PUT' ? await db.get('SELECT * FROM trades WHERE id=?', [(req.params as Record<string, string>).id]) : null;
       if (req.method === 'PUT' && !existing) return res.status(404).json({ error: 'Trade not found' });
       const extra = await validateFramework(db, req.body, inst, existing);
-      const bt = await validateBacktest(db, req.body, existing);
       const pnl = extra.pnl !== undefined ? extra.pnl : isClosed ? calcPnl(direction, entryPrice, exitPrice, quantity, inst.pointValue) : null;
 
       await db.transaction(async run => {
+      const bt = await validateBacktest(db, req.body, existing, run);
       await run(
         `UPDATE trades SET instrumentId=?, direction=?, contractType=?, entryDateTime=?, entryPrice=?, slPrice=?, targetPrice=?, quantity=?, exitDateTime=?, exitPrice=?, status=?, pnl=?, comments=?, updatedAt=CURRENT_TIMESTAMP WHERE id=?`,
         [instrumentId, direction, contractType, entryDateTime, entryPrice, slPrice ?? null, targetPrice ?? null, quantity, exitDateTime ?? null, exitPrice ?? null, status || 'Open', pnl, comments ?? null, (req.params as Record<string, string>).id]

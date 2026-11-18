@@ -17,9 +17,8 @@ type SortKey = 'entryDateTime' | 'instrumentName' | 'direction' | 'pnl' | 'statu
 export default function TradeLog() {
   const [params,setParams]=useSearchParams();
   const [btData,setBtData]=useState<BacktestData>({strategies:[],batches:[],sessions:[]});
-  const [filterBatch,setFilterBatch]=useState('');
+  const [filterBatch,setFilterBatch]=useState(params.get('batch')||'');
   const filterSession=params.get('session')||'';
-  useEffect(()=>{fetchBacktesting().then(setBtData).catch(e=>toast.error(e.message));},[]);
 
   const [trades, setTrades] = useState<Trade[]>([]);
   const [instruments, setInstruments] = useState<Instrument[]>([]);
@@ -52,8 +51,8 @@ export default function TradeLog() {
 
   const load = useCallback(() => {
     setLoading(true);
-    Promise.all([fetchTrades(), fetchInstruments(), fetchTagCategories()])
-      .then(([t, i, c]) => { setTrades(t); setInstruments(i); setTagCategories(c); })
+    Promise.all([fetchTrades(), fetchInstruments(), fetchTagCategories(), fetchBacktesting()])
+      .then(([t, i, c, research]) => { setTrades(t); setInstruments(i); setTagCategories(c); setBtData(research); })
       .catch(e => toast.error(e.message))
       .finally(() => setLoading(false));
   }, []);
@@ -89,7 +88,7 @@ export default function TradeLog() {
     return trades
       .filter(t => {
         if (filterSession && t.sessionId!==Number(filterSession)) return false;
-        if (filterBatch && !btData.sessions.some(s=>s.id===t.sessionId&&s.batchId===Number(filterBatch))) return false;
+        if (filterBatch && t.batchId!==Number(filterBatch)) return false;
         if (filterProfile && t.profile !== filterProfile) return false;
         if (filterAccount && t.account !== filterAccount) return false;
         if (filterDateFrom && istDateKey(t.entryDateTime) < filterDateFrom) return false;
@@ -164,8 +163,8 @@ export default function TradeLog() {
 
       {/* Filters */}
       <div className="filters-bar">
-        <label className="form-field">Batch<select className="select" value={filterBatch} onChange={e=>setFilterBatch(e.target.value)}><option value="">All batches</option>{btData.batches.map(b=><option key={b.id} value={b.id}>{b.name}</option>)}</select></label>
-        <label className="form-field">Historical session<select className="select" value={filterSession} onChange={e=>{const next=new URLSearchParams(params);if(e.target.value)next.set('session',e.target.value);else next.delete('session');setParams(next);}}><option value="">All sessions</option>{btData.sessions.filter(s=>!filterBatch||s.batchId===Number(filterBatch)).map(s=><option key={s.id} value={s.id}>{btData.batches.find(b=>b.id===s.batchId)?.name} · {s.date}</option>)}</select></label>
+        <label className="form-field">Batch<select className="select" value={filterBatch} onChange={e=>{setFilterBatch(e.target.value);if(e.target.value)sessionStorage.setItem('bt-batch',e.target.value);}}><option value="">All batches</option>{btData.batches.map(b=><option key={b.id} value={b.id}>{b.name}</option>)}</select></label>
+        <label className="form-field">Historical day<select className="select" value={filterSession} onChange={e=>{const next=new URLSearchParams(params);if(e.target.value)next.set('session',e.target.value);else next.delete('session');setParams(next);}}><option value="">All days</option>{btData.sessions.filter(s=>!filterBatch||s.batchId===Number(filterBatch)).map(s=><option key={s.id} value={s.id}>{btData.batches.find(b=>b.id===s.batchId)?.name} · {s.date}</option>)}</select></label>
         <div className="form-field"><label>Profile</label><select className="select" value={filterProfile} onChange={e => setFilterProfile(e.target.value)}><option value="">All profiles</option>{Object.entries(profileNames).map(([id, name]) => <option key={id} value={id}>{name}</option>)}</select></div>
         <div className="form-field"><label>Account</label><select className="select" value={filterAccount} onChange={e => setFilterAccount(e.target.value)}><option value="">All accounts</option>{[...new Set(trades.map(t => t.account || 'Personal'))].map(a => <option key={a}>{a}</option>)}</select></div>
         <div className="form-field">
@@ -247,7 +246,7 @@ export default function TradeLog() {
                   <SortCol label="Instrument" sortKey="instrumentName" current={sortKey} asc={sortAsc} onClick={toggleSort} />
                   <SortCol label="Direction" sortKey="direction" current={sortKey} asc={sortAsc} onClick={toggleSort} />
                   <SortCol label="Qty" sortKey="quantity" current={sortKey} asc={sortAsc} onClick={toggleSort} />
-                  <th>Session / adherence</th><th>Entry</th><th>SL</th><th>Target</th><th>Exit</th>
+                  <th>Day / adherence</th><th>Entry</th><th>SL</th><th>Target</th><th>Exit</th>
                   <SortCol label="PnL" sortKey="pnl" current={sortKey} asc={sortAsc} onClick={toggleSort} />
                   <SortCol label="Status" sortKey="status" current={sortKey} asc={sortAsc} onClick={toggleSort} />
                   <th>Tags</th>
@@ -371,7 +370,7 @@ export default function TradeLog() {
 
       {viewerTrade && viewerId !== null && <TradeViewer trade={viewerTrade} position={viewerIndex} count={filteredTrades.length} onNavigate={navigateViewer} onClose={closeViewer} onEdit={id => { closeViewer(); void openEdit(id); }} />}
       {/* Trade form modal */}
-      <TradeForm open={formOpen} trade={editTrade} onClose={() => setFormOpen(false)} onSaved={load} />
+      <TradeForm defaultBatchId={Number(filterBatch)||undefined} open={formOpen} trade={editTrade} onClose={() => setFormOpen(false)} onSaved={load} />
     </div>
   );
 }

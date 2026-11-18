@@ -11,6 +11,7 @@ import TextTradeEntry from './TextTradeEntry';
 import BacktestFields from './BacktestFields';
 
 interface Props {
+  defaultBatchId?:number;
   open: boolean;
   trade: Trade | null;         // existing trade to edit, else null
   onClose: () => void;
@@ -49,7 +50,7 @@ const emptyForm = (): FormState => ({
   tags: [],
 });
 
-export default function TradeForm({ open, trade, onClose, onSaved }: Props) {
+export default function TradeForm({ open, trade, onClose, onSaved, defaultBatchId }: Props) {
   const [bt, setBt] = useState<Partial<Trade>>({});
   const [mode, setMode] = useState<'form' | 'text'>('form');
   const [textDraft, setTextDraft] = useState('');
@@ -68,21 +69,21 @@ export default function TradeForm({ open, trade, onClose, onSaved }: Props) {
 
   useEffect(() => {
     if (!open) return;
-    setBt(trade ? {sessionId:trade.sessionId,adherence:trade.adherence,setup:trade.setup,marketCondition:trade.marketCondition} : {sessionId:Number(sessionStorage.getItem('bt-session')) || null,adherence:'Unreviewed',setup:'',marketCondition:''});
+    setBt(trade ? {batchId:trade.batchId,sessionId:trade.sessionId,adherence:trade.adherence,setup:trade.setup,marketCondition:trade.marketCondition} : {batchId:defaultBatchId||Number(sessionStorage.getItem('bt-batch'))||null,adherence:'Unreviewed',setup:'',marketCondition:''});
     setMode('form');
     setTextReady(false);
     setTextLoadError('');
     setExtra(trade ? { profile:trade.profile || 'prop', holdingStyle:trade.holdingStyle || 'Intraday', assetType:trade.assetType || trade.contractType, account:trade.account || 'Personal', strategy:trade.strategy || '', costs:trade.costs || 0, plannedRisk:trade.plannedRisk, capitalCommitted:trade.capitalCommitted, multiplier:trade.multiplier, framework:trade.framework || emptyFramework() } : { profile:'prop', holdingStyle:'Intraday', assetType:'CFD', account:'Personal', costs:0, framework:emptyFramework() });
     setForm(trade ? formFromTrade(trade) : emptyForm());
-    if(!trade) void fetchBacktesting().then(d=>{const s=d.sessions.find(x=>x.id===Number(sessionStorage.getItem('bt-session')));if(s)setForm(f=>({...f,entryDateTime:s.date+'T09:15'}));}).catch(()=>{});
     setSnapshots(trade?.snapshots ?? []);
     let active = true;
-    Promise.all([fetchInstruments(), fetchTagCategories()]).then(([items, tags]) => {
+    Promise.all([fetchInstruments(), fetchTagCategories(), fetchBacktesting()]).then(([items, tags, research]) => {
       if (!active) return;
       setInstruments(items); setCategories(tags); setTextReady(true);
+      if(!trade){const activeBatches=research.batches.filter(b=>b.status==='Active');setBt(v=>({...v,batchId:research.batches.some(b=>b.id===v.batchId)?v.batchId:activeBatches.length===1?activeBatches[0].id:null}));}
     }).catch(e => { if (active) { toast.error(e.message); setTextLoadError(e.message); } });
     return () => { active = false; };
-  }, [open, trade]);
+  }, [open, trade, defaultBatchId]);
 
   const set = <K extends keyof FormState>(key: K, value: FormState[K]) =>
     setForm(f => ({ ...f, [key]: value }));

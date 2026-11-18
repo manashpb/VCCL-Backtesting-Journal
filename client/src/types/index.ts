@@ -38,7 +38,7 @@ export interface Execution { action:'Entry' | 'Exit'; time:string; quantity:numb
 export interface Leg { entryDateTime?: string; exitDateTime?: string; executions?:Execution[]; markPrice?:number | null; symbol: string; assetType: string; side: 'Buy' | 'Sell'; expiry: string; strike: number | null; optionType: string; quantity: number; multiplier: number; entryPrice: number; exitPrice: number | null; }
 export interface Framework { optionType?: 'CE' | 'PE' | ''; strike?: number | null; delta?: number | null; templateVersion: number; fields: AnalysisField[]; analysis: Record<string, string | number>; observedAt: string; source: string; thesis: string; exitReason: string; review: string; adjustments: string; legs: Leg[]; }
 export interface Trade {
-  sessionId?:number | null; adherence?:string; setup?:string; marketCondition?:string;
+  batchId?:number | null; sessionId?:number | null; adherence?:string; setup?:string; marketCondition?:string;
   realisedPnl?:number | null; unrealisedPnl?:number | null; totalCosts?:number;
   profile?: string; holdingStyle?: string; assetType?: string; account?: string; strategy?: string;
   capitalCommitted?: number | null; plannedRisk?: number | null; costs?: number; grossPnl?: number | null; multiplier?: number; framework?: Framework;

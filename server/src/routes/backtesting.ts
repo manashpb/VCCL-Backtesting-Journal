@@ -34,13 +34,28 @@ export function backtestingRoutes(db:Database) {
     if(!result.changes) return res.status(404).json({error:'Batch not found'});
     res.json({ok:true});
   }catch(e){next(e);} });
+  router.post('/days/no-trade',async(req,res,next)=>{try{
+    const b=req.body,date=day(b.date);
+    const result=await db.transaction(async run=>{
+      const batch=await db.get('SELECT * FROM bt_batches WHERE id=?',[b.batchId]);
+      if(!batch)fail('Choose a test batch');
+      if(batch.status!=='Active')fail('Reopen the batch before reviewing days');
+      if(date<batch.startDate||date>batch.endDate)fail('Historical date is outside the batch period');
+      const old=await db.get('SELECT * FROM bt_sessions WHERE batchId=? AND date=?',[batch.id,date]);
+      if(old && (await db.get('SELECT COUNT(*) AS count FROM trades WHERE sessionId=?',[old.id])).count)fail('This day has trades; use its optional daily review instead');
+      const context=b.context===undefined?(old?.context||''):text(b.context,'daily notes');
+      const reason=text(b.skipReason,'no-trade reason')||old?.skipReason||'No trade';
+      await run("INSERT INTO bt_sessions(batchId,date,context,setups,skipReason,reviewed) VALUES(?,?,?,0,?,1) ON CONFLICT(batchId,date) DO UPDATE SET context=excluded.context,skipReason=excluded.skipReason,reviewed=1",[batch.id,date,context,reason]);
+      return db.get('SELECT id FROM bt_sessions WHERE batchId=? AND date=?',[batch.id,date]);
+    });res.json(result);
+  }catch(e){next(e);}});
   async function saveSession(b:any,id?:string){
     const batch=await db.get('SELECT * FROM bt_batches WHERE id=?',[b.batchId]); if(!batch) fail('Choose a batch');
     const date=day(b.date); if(date<batch.startDate || date>batch.endDate) fail('Session date is outside the batch period');
     if(!Number.isInteger(b.setups)||b.setups<0||b.setups>10000) fail('Setups must be a non-negative integer');
     if(typeof b.reviewed!=='boolean') fail('Reviewed must be true or false');
     const skip=text(b.skipReason,'skip reason');
-    if(b.reviewed && b.setups===0 && !skip) fail('Record a reason for a reviewed no-setup day');
+
     const args=[batch.id,date,text(b.context,'context'),b.setups,skip,b.reviewed?1:0];
     if(id){
       const old=await db.get('SELECT * FROM bt_sessions WHERE id=?',[id]); if(!old) fail('Session not found');
@@ -54,18 +69,34 @@ export function backtestingRoutes(db:Database) {
   router.put('/sessions/:id',async(req,res,next)=>{try{await saveSession(req.body,req.params.id);res.json({ok:true});}catch(e){next(e);}});
   return router;
 }
-export async function validateBacktest(db:Database,body:any,existing?:any) {
-  const sessionId=body.sessionId===undefined?existing?.sessionId:body.sessionId;
-  if (sessionId == null && process.env.ALLOW_UNASSIGNED_TEST_TRADES !== 'true') fail('Choose a historical session before saving a trade');
-  if(sessionId!=null) {
-    if(!Number.isInteger(sessionId)||sessionId<=0) fail('Invalid session');
-    const session=await db.get('SELECT s.*,b.status FROM bt_sessions s JOIN bt_batches b ON b.id=s.batchId WHERE s.id=?',[sessionId]);
-    if(!session) fail('Session not found');
-    if(session.status!=='Active') fail('Reopen the batch before recording or changing trades');
-    const entry=body.entryDateTime;
-    if(!entry || !Number.isFinite(Date.parse(entry)) || new Date(Date.parse(entry)+330*60000).toISOString().slice(0,10)!==session.date) fail('Entry date in IST must match the selected historical session');
-  }
+export async function validateBacktest(db:Database,body:any,existing:any,run:Database['run']) {
   const adherence=body.adherence??existing?.adherence??'Unreviewed';
   if(!['Unreviewed','Followed','Deviation'].includes(adherence)) fail('Invalid rule adherence');
-  return {sessionId:sessionId??null,adherence,setup:text(body.setup??existing?.setup,'setup'),marketCondition:text(body.marketCondition??existing?.marketCondition,'market condition')};
+  const metadata={adherence,setup:text(body.setup??existing?.setup,'setup'),marketCondition:text(body.marketCondition??existing?.marketCondition,'market condition')};
+  // Called inside the trade transaction so a rejected trade cannot leave an empty day behind.
+  const oldSession=existing?.sessionId ? await db.get('SELECT * FROM bt_sessions WHERE id=?',[existing.sessionId]) : null;
+  if(oldSession){const oldBatch=await db.get('SELECT status FROM bt_batches WHERE id=?',[oldSession.batchId]);if(oldBatch?.status!=='Active')fail('Reopen the batch before changing trades');}
+  let sessionId=body.sessionId===undefined?existing?.sessionId:body.sessionId;
+  let batchId=body.batchId;
+  if(batchId===undefined && sessionId!=null){
+    if(!Number.isInteger(sessionId)||sessionId<=0)fail('Invalid session');
+    const session=await db.get('SELECT * FROM bt_sessions WHERE id=?',[sessionId]);
+    if(!session)fail('Session not found');
+    batchId=session.batchId;
+  }
+  if(batchId===undefined && oldSession)batchId=oldSession.batchId;
+  if(batchId==null){
+    if(process.env.ALLOW_UNASSIGNED_TEST_TRADES==='true')return {...metadata,sessionId:null};
+    fail('Choose a test batch before saving a trade');
+  }
+  if(!Number.isInteger(batchId)||batchId<=0)fail('Invalid test batch');
+  const batch=await db.get('SELECT * FROM bt_batches WHERE id=?',[batchId]);
+  if(!batch)fail('Test batch not found');
+  if(batch.status!=='Active')fail('Reopen the batch before recording or changing trades');
+  if(!body.entryDateTime||!Number.isFinite(Date.parse(body.entryDateTime)))fail('Invalid entry date');
+  const date=new Date(Date.parse(body.entryDateTime)+330*60000).toISOString().slice(0,10);
+  if(date<batch.startDate||date>batch.endDate)fail('Entry date in IST is outside the batch period');
+  await run("INSERT INTO bt_sessions(batchId,date,context,setups,skipReason,reviewed) VALUES(?,?,'',0,'',0) ON CONFLICT(batchId,date) DO NOTHING",[batchId,date]);
+  const session=await db.get('SELECT id FROM bt_sessions WHERE batchId=? AND date=?',[batchId,date]);
+  return {...metadata,sessionId:session.id};
 }
