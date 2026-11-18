@@ -38,7 +38,7 @@ CSV exports include session ID, adherence, setup, market condition and full fram
 
 ## Operations
 
-`ecosystem.config.cjs` starts a separate `backtesting-journal` PM2 process. Keep `.env`, database and snapshots out of Git. Stop only this process before archiving the database and snapshots together; restart afterward, and keep a private off-machine backup. Restoring requires stopping the process and restoring those files together. Never use the real trading journal database as `DB_PATH`.
+`ecosystem.config.cjs` starts a separate `backtesting-journal` PM2 process. Keep `.env`, database and snapshots out of Git. Stop only this process before archiving the database and snapshots together; restart afterward, and keep a private off-machine backup. Restoring requires stopping the process and restoring those files together. Never use the real trading journal database as `DB_PATH`. For the default data paths, run `bash scripts/backup.sh /absolute/private/backup/directory` on the server. It briefly stops only this application and restarts it on exit; review the script if you override storage paths. Copy the resulting private archive off the machine.
 
 Tests cover inherited accounting, YAML parsing and template updates, plus strategy versions, historical date validation, sessions, trade linkage, batch state, image upload, authentication, cross-origin writes and R metrics.
 
